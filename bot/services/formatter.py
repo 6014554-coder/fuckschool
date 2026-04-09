@@ -4,13 +4,13 @@
 Применяемые правила (ГОСТ 7.32-2017 и требования большинства российских вузов):
 - Шрифт: Times New Roman, 14 pt
 - Межстрочный интервал: 1.5
-- Поля: левое 30 мм, правое 15 мм, верхнее 20 мм, нижнее 20 мм
+- Поля: левое 30 мм, правое 10 мм, верхнее 20 мм, нижнее 20 мм
 - Отступ первой строки абзаца: 1.25 см
 - Выравнивание основного текста: по ширине
-- Заголовки 1 уровня: 14 pt, жирный, КАПСЛОК, по центру, без отступа
+- Заголовки 1 уровня: 14 pt, жирный, КАПСЛОК, по центру, без отступа, с новой страницы
 - Заголовки 2 уровня: 14 pt, жирный, по левому краю, без отступа
 - Заголовки 3 уровня: 14 pt, курсив, по левому краю, без отступа
-- Нумерация страниц: снизу по центру, начиная со 2-й страницы
+- Нумерация страниц: снизу по центру, без точки
 """
 
 from io import BytesIO
@@ -31,7 +31,7 @@ FONT_NAME = "Times New Roman"
 FONT_SIZE = Pt(14)
 
 MARGIN_LEFT   = Mm(30)
-MARGIN_RIGHT  = Mm(15)
+MARGIN_RIGHT  = Mm(10)
 MARGIN_TOP    = Mm(20)
 MARGIN_BOTTOM = Mm(20)
 
@@ -169,6 +169,12 @@ def format_document(docx_bytes: bytes) -> bytes:
             cfg = HEADING_CONFIG.get(heading_level, HEADING_CONFIG[1])
             fmt.alignment = cfg["align"]
             fmt.first_line_indent = Pt(0)
+
+            # Заголовок 1 уровня — всегда с новой страницы
+            if heading_level == 1:
+                fmt.page_break_before = True
+            else:
+                fmt.page_break_before = False
 
             for run in para.runs:
                 _set_font(
