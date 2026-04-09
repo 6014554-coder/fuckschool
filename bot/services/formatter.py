@@ -38,9 +38,12 @@ MARGIN_BOTTOM = Mm(20)
 FIRST_LINE_INDENT = Cm(1.25)
 
 HEADING_CONFIG = {
-    1: {"bold": True,  "italic": False, "caps": True,  "align": WD_ALIGN_PARAGRAPH.CENTER},
-    2: {"bold": True,  "italic": False, "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT},
-    3: {"bold": False, "italic": True,  "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT},
+    1: {"bold": True,  "italic": False, "caps": True,  "align": WD_ALIGN_PARAGRAPH.CENTER,
+        "space_before": Pt(0),  "space_after": Pt(12)},
+    2: {"bold": True,  "italic": False, "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT,
+        "space_before": Pt(12), "space_after": Pt(6)},
+    3: {"bold": False, "italic": True,  "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT,
+        "space_before": Pt(8),  "space_after": Pt(4)},
 }
 
 
@@ -74,6 +77,60 @@ def _is_body_text(para) -> bool:
     style_name = para.style.name if para.style else ""
     body_styles = {"Normal", "Body Text", "Основной текст", ""}
     return style_name in body_styles or style_name.startswith("Normal")
+
+
+def _is_table_caption(para) -> bool:
+    text = para.text.strip().upper()
+    return text.startswith("ТАБЛИЦА") or text.startswith("ТАБЛИЦЯ")
+
+
+def _is_figure_caption(para) -> bool:
+    text = para.text.strip()
+    return (text.lower().startswith("рис.") or
+            text.lower().startswith("рисунок") or
+            text.lower().startswith("fig."))
+
+
+def _is_list_item(para) -> bool:
+    style_name = para.style.name if para.style else ""
+    return ("List" in style_name or
+            "Список" in style_name or
+            style_name.startswith("List Bullet") or
+            style_name.startswith("List Number"))
+
+
+def _format_table_caption(para):
+    """Подпись таблицы: ТАБЛИЦА N — Название (по левому краю, без отступа)."""
+    fmt = para.paragraph_format
+    fmt.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    fmt.first_line_indent = Pt(0)
+    fmt.space_before = Pt(12)
+    fmt.space_after  = Pt(3)
+    for run in para.runs:
+        _set_font(run, bold=False, italic=False, caps=False)
+
+
+def _format_figure_caption(para):
+    """Подпись рисунка: Рис. N — Название (по центру, без отступа)."""
+    fmt = para.paragraph_format
+    fmt.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fmt.first_line_indent = Pt(0)
+    fmt.space_before = Pt(3)
+    fmt.space_after  = Pt(12)
+    for run in para.runs:
+        _set_font(run, bold=False, italic=False, caps=False)
+
+
+def _format_list_item(para):
+    """Форматирование элементов списка по ГОСТ."""
+    fmt = para.paragraph_format
+    fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
+    fmt.first_line_indent = Pt(0)
+    fmt.left_indent = Cm(1.25)
+    fmt.space_before = Pt(0)
+    fmt.space_after  = Pt(0)
+    for run in para.runs:
+        _set_font(run, bold=False, italic=False, caps=False)
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +226,8 @@ def format_document(docx_bytes: bytes) -> bytes:
             cfg = HEADING_CONFIG.get(heading_level, HEADING_CONFIG[1])
             fmt.alignment = cfg["align"]
             fmt.first_line_indent = Pt(0)
+            fmt.space_before = cfg["space_before"]
+            fmt.space_after  = cfg["space_after"]
 
             # Заголовок 1 уровня — всегда с новой страницы
             if heading_level == 1:
@@ -191,8 +250,17 @@ def format_document(docx_bytes: bytes) -> bytes:
             for run in para.runs:
                 _set_font(run, bold=False, italic=False, caps=False)
 
+        elif _is_table_caption(para):
+            _format_table_caption(para)
+
+        elif _is_figure_caption(para):
+            _format_figure_caption(para)
+
+        elif _is_list_item(para):
+            _format_list_item(para)
+
         else:
-            # Прочие стили (подписи, цитаты и т.д.) — только шрифт
+            # Прочие стили — только шрифт
             for run in para.runs:
                 run.font.name = FONT_NAME
                 run.font.size = FONT_SIZE
