@@ -68,6 +68,36 @@ UNNUMBERED_HEADINGS = {
 
 
 # ---------------------------------------------------------------------------
+# Поиск начала содержательной части (после титульника)
+# ---------------------------------------------------------------------------
+
+# Маркеры, с которых начинается содержательная часть
+_CONTENT_START_WORDS = {
+    "СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ",
+    "АННОТАЦИЯ", "ABSTRACT",
+    "ВВЕДЕНИЕ", "INTRODUCTION",
+}
+
+def _find_content_start(paragraphs) -> int:
+    """
+    Возвращает индекс первого параграфа содержательной части.
+    Ищет СОДЕРЖАНИЕ / АННОТАЦИЯ / ВВЕДЕНИЕ / нумерованный заголовок "1.".
+    Если не нашли — возвращает 0 (форматируем всё).
+    """
+    for i, para in enumerate(paragraphs):
+        text = para.text.strip()
+        if not text:
+            continue
+        upper = text.upper().rstrip(" .")
+        if upper in _CONTENT_START_WORDS:
+            return i
+        # Нумерованный раздел: "1 Название" или "1. Название"
+        if re.match(r'^1\.?\s+\S', text):
+            return i
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Определение типа параграфа
 # ---------------------------------------------------------------------------
 
@@ -319,8 +349,14 @@ def format_document(docx_bytes: bytes, config: dict = None) -> bytes:
         section.top_margin    = Mm(margins["top_mm"])
         section.bottom_margin = Mm(margins["bottom_mm"])
 
-    # 2. Обход всех параграфов
-    for para in doc.paragraphs:
+    # 2. Находим начало содержательной части (пропускаем титульник)
+    all_paras = doc.paragraphs
+    content_start = _find_content_start(all_paras)
+
+    # 3. Обход параграфов: до content_start — не трогаем, после — форматируем
+    for idx, para in enumerate(all_paras):
+        if idx < content_start:
+            continue
         if not para.text.strip():
             continue
 

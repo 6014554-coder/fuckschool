@@ -164,18 +164,28 @@ def _heading_level_by_content(para):
     return None
 
 
-def _is_title_page_para(para, idx):
+_CONTENT_START_WORDS = {
+    "СОДЕРЖАНИЕ", "ОГЛАВЛЕНИЕ",
+    "АННОТАЦИЯ", "ABSTRACT",
+    "ВВЕДЕНИЕ", "INTRODUCTION",
+}
+
+
+def _find_content_start_idx(paragraphs) -> int:
     """
-    Эвристически определяет: похоже ли на обложку (первые 15 параграфов,
-    текст очень короткий или ALL-CAPS без нумерации).
+    Индекс первого параграфа содержательной части документа.
+    Ищет СОДЕРЖАНИЕ / АННОТАЦИЯ / ВВЕДЕНИЕ / нумерованный раздел "1.".
     """
-    if idx < 15:
-        return True
-    text = para.text.strip()
-    # Строки-разделители или пустые после очистки
-    if len(text) < 5:
-        return True
-    return False
+    for i, para in enumerate(paragraphs):
+        text = para.text.strip()
+        if not text:
+            continue
+        upper = text.upper().rstrip(" .")
+        if upper in _CONTENT_START_WORDS:
+            return i
+        if re.match(r'^1\.?\s+\S', text):
+            return i
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -221,35 +231,64 @@ def analyze_example(docx_bytes: bytes) -> dict:
             "bottom_mm": _mm(sec.bottom_margin),
         }
 
-    # ---- Классификация параграфов -----------------------------------
+    # ---- Пропускаем титульник ----------------------------------------
+    all_paras = doc.paragraphs
+    content_start = _find_content_start_idx(all_paras)
+
+    # ---- Классификация параграфов (только содержательная часть) -----
     body_paras    = []
     heading_paras = {1: [], 2: [], 3: []}
 
-    for idx, para in enumerate(doc.paragraphs):
+    for idx, para in enumerate(all_paras):
+        if idx < content_start:
+            continue
         text = para.text.strip()
         if not text:
             continue
         lvl = (_heading_level_by_style(para) or _heading_level_by_content(para))
         if lvl in (1, 2, 3):
             heading_paras[lvl].append(para)
-        elif not _is_title_page_para(para, idx):
+        else:
             body_paras.append(para)
 
-    # ---- Шрифт -------------------------------------------------------
-    font_sizes = []
-    font_names = []
-    for para in body_paras[:80]:
-        for run in para.runs:
-            sz = _get_run_font_size_pt(run)
-            if sz and 6 <= sz <= 24:
-                font_sizes.append(round(sz * 2) / 2)
-            nm = _get_para_font_name(para)
-            if nm:
-                font_names.append(nm)
-                break  # достаточно одного имени с параграфа
+    # ---- Шрифт: из Normal стиля (наследуется телом документа) ----------
+    font_size_pt = 14.0
+    font_name    = "Times New Roman"
+    got_size_from_style = False
 
-    font_size_pt = Counter(font_sizes).most_common(1)[0][0] if font_sizes else 14.0
-    font_name    = Counter(font_names).most_common(1)[0][0] if font_names else "Times New Roman"
+    for style in doc.styles:
+        if style.name in ("Normal", "Нормальный"):
+            try:
+                if style.font.size:
+                    font_size_pt = round(style.font.size / EMU_PER_PT * 2) / 2
+                    got_size_from_style = True
+                if style.font.name:
+                    font_name = style.font.name
+            except Exception:
+                pass
+            # Fallback через XML sz (полуточки) — только если API не дал размер
+            if not got_size_from_style:
+                try:
+                    rpr = style._element.find(".//" + qn("w:rPr"))
+                    if rpr is not None:
+                        sz_el = rpr.find(qn("w:sz"))
+                        if sz_el is not None and sz_el.get(qn("w:val")):
+                            font_size_pt = float(sz_el.get(qn("w:val"))) / 2.0
+                            got_size_from_style = True
+                except Exception:
+                    pass
+            break
+
+    # Только если Normal стиль вообще не дал размер — ищем в body runs
+    if not got_size_from_style:
+        explicit_sizes = []
+        for para in body_paras[:40]:
+            for run in para.runs:
+                sz = _get_run_font_size_pt(run)
+                if sz and 8 <= sz <= 20:
+                    explicit_sizes.append(round(sz * 2) / 2)
+        if explicit_sizes:
+            font_size_pt = Counter(explicit_sizes).most_common(1)[0][0]
 
     # ---- Выравнивание из стиля Normal (наследуется большинством параграфов) ----
     default_alignment = WD_ALIGN_PARAGRAPH.JUSTIFY  # ГОСТ-дефолт
