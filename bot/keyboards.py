@@ -14,6 +14,13 @@ def work_type_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def example_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📎 Загрузить пример",  callback_data="example:upload")],
+        [InlineKeyboardButton(text="⚡ Стандартный ГОСТ",  callback_data="example:skip")],
+    ])
+
+
 def buy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="5 документов — 199 ₽",  callback_data="buy:pack_5")],

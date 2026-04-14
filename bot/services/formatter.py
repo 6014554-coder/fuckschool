@@ -1,7 +1,7 @@
 """
 ГОСТ-форматирование .docx документов.
 
-Применяемые правила (ГОСТ 7.32-2017 и требования большинства российских вузов):
+Применяемые правила по умолчанию (ГОСТ 7.32-2017):
 - Шрифт: Times New Roman, 14 pt
 - Межстрочный интервал: 1.5
 - Поля: левое 30 мм, правое 10 мм, верхнее 20 мм, нижнее 20 мм
@@ -11,6 +11,8 @@
 - Заголовки 2 уровня: 14 pt, жирный, по левому краю, без отступа
 - Заголовки 3 уровня: 14 pt, жирный, по левому краю, без отступа
 - Нумерация страниц: снизу по центру, без точки
+
+Если передан config (из analyzer.analyze_example), используются параметры из него.
 """
 
 import re
@@ -24,7 +26,7 @@ from docx.oxml.ns import qn
 
 
 # ---------------------------------------------------------------------------
-# Константы ГОСТ
+# Константы ГОСТ (defaults)
 # ---------------------------------------------------------------------------
 
 FONT_NAME = "Times New Roman"
@@ -39,11 +41,14 @@ FIRST_LINE_INDENT = Cm(1.25)
 
 HEADING_CONFIG = {
     1: {"bold": True,  "italic": False, "caps": True,  "align": WD_ALIGN_PARAGRAPH.CENTER,
-        "space_before": Pt(0),  "space_after": Pt(12), "page_break": True},
+        "space_before": Pt(0),  "space_after": Pt(12), "page_break": True,
+        "first_line_indent": Pt(0)},
     2: {"bold": True,  "italic": False, "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT,
-        "space_before": Pt(12), "space_after": Pt(6),  "page_break": False},
+        "space_before": Pt(12), "space_after": Pt(6),  "page_break": False,
+        "first_line_indent": Pt(0)},
     3: {"bold": True,  "italic": False, "caps": False, "align": WD_ALIGN_PARAGRAPH.LEFT,
-        "space_before": Pt(8),  "space_after": Pt(4),  "page_break": False},
+        "space_before": Pt(8),  "space_after": Pt(4),  "page_break": False,
+        "first_line_indent": Pt(0)},
 }
 
 # Ключевые слова для заголовков 1 уровня без нумерации
@@ -84,17 +89,10 @@ def _get_heading_level_by_content(para):
     if not text or len(text) < 2:
         return None
 
-    # Проверяем жирность хотя бы одного run
-    is_bold = False
-    for run in para.runs:
-        if run.font.bold:
-            is_bold = True
-            break
-
+    is_bold = any(run.font.bold for run in para.runs)
     if not is_bold:
         return None
 
-    # Нумерованные заголовки: "1. ...", "1.1. ...", "1.1.1. ..."
     if re.match(r'^\d+\.\d+\.\d+', text):
         return 3
     if re.match(r'^\d+\.\d+', text):
@@ -102,11 +100,9 @@ def _get_heading_level_by_content(para):
     if re.match(r'^\d+\.?\s+\S', text):
         return 1
 
-    # Ненумерованные заголовки верхнего уровня (всё заглавными)
     text_upper = text.upper()
     if text_upper in UNNUMBERED_HEADINGS:
         return 1
-    # Проверка что весь текст заглавными (минимум 4 символа)
     if len(text) >= 4 and text == text_upper and not text[0].isdigit():
         return 1
 
@@ -133,17 +129,16 @@ def _is_figure_caption(para) -> bool:
 
 def _is_list_item(para) -> bool:
     style_name = para.style.name if para.style else ""
-    return ("List" in style_name or
-            "Список" in style_name)
+    return "List" in style_name or "Список" in style_name
 
 
 # ---------------------------------------------------------------------------
 # Применение форматирования
 # ---------------------------------------------------------------------------
 
-def _set_font(run, bold=None, italic=None, caps=None):
-    run.font.name = FONT_NAME
-    run.font.size = FONT_SIZE
+def _set_font(run, font_name, font_size, bold=None, italic=None, caps=None):
+    run.font.name = font_name
+    run.font.size = font_size
     if bold is not None:
         run.font.bold = bold
     if italic is not None:
@@ -153,34 +148,39 @@ def _set_font(run, bold=None, italic=None, caps=None):
     run.font.color.rgb = RGBColor(0, 0, 0)
 
 
-def _apply_heading(para, level: int):
-    cfg = HEADING_CONFIG[level]
+def _apply_heading(para, level: int, cfg: dict, font_name: str, font_size):
+    h = cfg["headings"].get(level)
+    if not h:
+        return
+
     fmt = para.paragraph_format
-    fmt.alignment        = cfg["align"]
-    fmt.first_line_indent = Pt(0)
-    fmt.space_before     = cfg["space_before"]
-    fmt.space_after      = cfg["space_after"]
+    fmt.alignment         = h["alignment"]
+    fmt.first_line_indent = Cm(h["first_line_indent_cm"])
+    fmt.space_before      = Pt(h["space_before_pt"])
+    fmt.space_after       = Pt(h["space_after_pt"])
     fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-    fmt.page_break_before = cfg["page_break"]
+    fmt.page_break_before = h["page_break"]
 
     for run in para.runs:
-        _set_font(run, bold=cfg["bold"], italic=cfg["italic"], caps=cfg["caps"])
+        _set_font(run, font_name, font_size,
+                  bold=h["bold"], italic=h["italic"], caps=h["caps"])
 
 
-def _apply_body(para):
+def _apply_body(para, cfg: dict, font_name: str, font_size):
+    b = cfg["body"]
     fmt = para.paragraph_format
-    fmt.alignment         = WD_ALIGN_PARAGRAPH.JUSTIFY
-    fmt.first_line_indent = FIRST_LINE_INDENT
-    fmt.space_before      = Pt(0)
-    fmt.space_after       = Pt(0)
+    fmt.alignment         = b["alignment"]
+    fmt.first_line_indent = Cm(b["first_line_indent_cm"])
+    fmt.space_before      = Pt(b["space_before_pt"])
+    fmt.space_after       = Pt(b["space_after_pt"])
     fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
     fmt.page_break_before = False
 
     for run in para.runs:
-        _set_font(run, bold=False, italic=False, caps=False)
+        _set_font(run, font_name, font_size, bold=False, italic=False, caps=False)
 
 
-def _apply_table_caption(para):
+def _apply_table_caption(para, font_name, font_size):
     fmt = para.paragraph_format
     fmt.alignment         = WD_ALIGN_PARAGRAPH.LEFT
     fmt.first_line_indent = Pt(0)
@@ -188,10 +188,10 @@ def _apply_table_caption(para):
     fmt.space_after       = Pt(3)
     fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
     for run in para.runs:
-        _set_font(run, bold=False, italic=False, caps=False)
+        _set_font(run, font_name, font_size, bold=False, italic=False, caps=False)
 
 
-def _apply_figure_caption(para):
+def _apply_figure_caption(para, font_name, font_size):
     fmt = para.paragraph_format
     fmt.alignment         = WD_ALIGN_PARAGRAPH.CENTER
     fmt.first_line_indent = Pt(0)
@@ -199,10 +199,10 @@ def _apply_figure_caption(para):
     fmt.space_after       = Pt(12)
     fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
     for run in para.runs:
-        _set_font(run, bold=False, italic=False, caps=False)
+        _set_font(run, font_name, font_size, bold=False, italic=False, caps=False)
 
 
-def _apply_list_item(para):
+def _apply_list_item(para, font_name, font_size):
     fmt = para.paragraph_format
     fmt.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
     fmt.first_line_indent = Pt(0)
@@ -210,14 +210,14 @@ def _apply_list_item(para):
     fmt.space_before      = Pt(0)
     fmt.space_after       = Pt(0)
     for run in para.runs:
-        _set_font(run, bold=False, italic=False, caps=False)
+        _set_font(run, font_name, font_size, bold=False, italic=False, caps=False)
 
 
 # ---------------------------------------------------------------------------
 # Нумерация страниц
 # ---------------------------------------------------------------------------
 
-def _add_page_numbers(doc: Document):
+def _add_page_numbers(doc: Document, font_name: str, font_size):
     """Добавляет нумерацию страниц снизу по центру."""
     section = doc.sections[0]
     footer = section.footer
@@ -226,8 +226,8 @@ def _add_page_numbers(doc: Document):
     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     run = para.add_run()
-    run.font.name = FONT_NAME
-    run.font.size = FONT_SIZE
+    run.font.name = font_name
+    run.font.size = font_size
 
     fld_begin = OxmlElement("w:fldChar")
     fld_begin.set(qn("w:fldCharType"), "begin")
@@ -246,55 +246,110 @@ def _add_page_numbers(doc: Document):
 
 
 # ---------------------------------------------------------------------------
+# Построение конфига из ГОСТ-defaults
+# ---------------------------------------------------------------------------
+
+def _default_config() -> dict:
+    return {
+        "font_name":    FONT_NAME,
+        "font_size_pt": 14.0,
+        "margins": {
+            "left_mm":   30.0,
+            "right_mm":  10.0,
+            "top_mm":    20.0,
+            "bottom_mm": 20.0,
+        },
+        "body": {
+            "first_line_indent_cm": 1.25,
+            "alignment":            WD_ALIGN_PARAGRAPH.JUSTIFY,
+            "space_before_pt":      0.0,
+            "space_after_pt":       0.0,
+            "line_spacing":         WD_LINE_SPACING.ONE_POINT_FIVE,
+        },
+        "headings": {
+            1: {"bold": True,  "italic": False, "caps": True,
+                "alignment": WD_ALIGN_PARAGRAPH.CENTER,
+                "first_line_indent_cm": 0.0,
+                "space_before_pt": 0.0, "space_after_pt": 12.0,
+                "page_break": True},
+            2: {"bold": True,  "italic": False, "caps": False,
+                "alignment": WD_ALIGN_PARAGRAPH.LEFT,
+                "first_line_indent_cm": 0.0,
+                "space_before_pt": 12.0, "space_after_pt": 6.0,
+                "page_break": False},
+            3: {"bold": True,  "italic": False, "caps": False,
+                "alignment": WD_ALIGN_PARAGRAPH.LEFT,
+                "first_line_indent_cm": 0.0,
+                "space_before_pt": 8.0, "space_after_pt": 4.0,
+                "page_break": False},
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Основная функция
 # ---------------------------------------------------------------------------
 
-def format_document(docx_bytes: bytes) -> bytes:
+def format_document(docx_bytes: bytes, config: dict = None) -> bytes:
     """
-    Принимает байты .docx, возвращает байты отформатированного .docx по ГОСТу.
+    Принимает байты .docx, возвращает байты отформатированного .docx.
+
+    config — опциональный словарь из analyzer.analyze_example().
+             Если None, применяются стандартные правила ГОСТ.
     """
+    if config is None:
+        config = _default_config()
+
+    # Заполняем недостающие уровни заголовков из defaults
+    default = _default_config()
+    for lvl in (1, 2, 3):
+        if lvl not in config.get("headings", {}):
+            config.setdefault("headings", {})[lvl] = default["headings"][lvl]
+
+    font_name = config.get("font_name", FONT_NAME)
+    font_size = Pt(config.get("font_size_pt", 14.0))
+    margins   = config.get("margins", default["margins"])
+
     doc = Document(BytesIO(docx_bytes))
 
     # 1. Поля страницы
     for section in doc.sections:
-        section.left_margin   = MARGIN_LEFT
-        section.right_margin  = MARGIN_RIGHT
-        section.top_margin    = MARGIN_TOP
-        section.bottom_margin = MARGIN_BOTTOM
+        section.left_margin   = Mm(margins["left_mm"])
+        section.right_margin  = Mm(margins["right_mm"])
+        section.top_margin    = Mm(margins["top_mm"])
+        section.bottom_margin = Mm(margins["bottom_mm"])
 
     # 2. Обход всех параграфов
     for para in doc.paragraphs:
         if not para.text.strip():
             continue
 
-        # Определяем тип: сначала по стилю Word, потом по содержимому
         heading_level = (_get_heading_level_by_style(para) or
                          _get_heading_level_by_content(para))
 
         if heading_level is not None:
-            _apply_heading(para, heading_level)
+            _apply_heading(para, heading_level, config, font_name, font_size)
 
         elif _is_list_item(para):
-            _apply_list_item(para)
+            _apply_list_item(para, font_name, font_size)
 
         elif _is_table_caption(para):
-            _apply_table_caption(para)
+            _apply_table_caption(para, font_name, font_size)
 
         elif _is_figure_caption(para):
-            _apply_figure_caption(para)
+            _apply_figure_caption(para, font_name, font_size)
 
         elif _is_body_text(para):
-            _apply_body(para)
+            _apply_body(para, config, font_name, font_size)
 
         else:
-            # Прочие стили — только шрифт и интервал
             para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
             for run in para.runs:
-                run.font.name = FONT_NAME
-                run.font.size = FONT_SIZE
+                run.font.name = font_name
+                run.font.size = font_size
 
     # 3. Нумерация страниц
-    _add_page_numbers(doc)
+    _add_page_numbers(doc, font_name, font_size)
 
     # 4. Сохраняем в байты
     buf = BytesIO()
