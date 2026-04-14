@@ -251,23 +251,49 @@ def analyze_example(docx_bytes: bytes) -> dict:
     font_size_pt = Counter(font_sizes).most_common(1)[0][0] if font_sizes else 14.0
     font_name    = Counter(font_names).most_common(1)[0][0] if font_names else "Times New Roman"
 
+    # ---- Выравнивание из стиля Normal (наследуется большинством параграфов) ----
+    default_alignment = WD_ALIGN_PARAGRAPH.JUSTIFY  # ГОСТ-дефолт
+    for style in doc.styles:
+        if style.name in ("Normal", "Нормальный", "Default Paragraph Font"):
+            try:
+                al = style.paragraph_format.alignment
+                if al is not None:
+                    default_alignment = al
+            except Exception:
+                pass
+            break
+
     # ---- Параметры тела (body) --------------------------------------
     indent_vals  = []
-    align_vals   = []
+    explicit_align_vals = []
 
-    for para in body_paras[:50]:
+    for para in body_paras[:80]:
         emu = _safe_first_line_indent_emu(para)
         if emu is not None and emu >= 0:
-            cm = emu / EMU_PER_CM
-            if 0 <= cm <= 5:
-                indent_vals.append(round(cm * 4) / 4)
+            indent_cm = emu / EMU_PER_CM
+            if 0 <= indent_cm <= 5:
+                indent_vals.append(round(indent_cm * 4) / 4)
 
+        # Собираем только явно установленные выравнивания (не None/inherited)
         al = _safe_alignment(para)
         if al is not None:
-            align_vals.append(al)
+            explicit_align_vals.append(al)
 
     first_line_indent_cm = Counter(indent_vals).most_common(1)[0][0] if indent_vals else 1.25
-    body_alignment = Counter(align_vals).most_common(1)[0][0] if align_vals else WD_ALIGN_PARAGRAPH.JUSTIFY
+
+    # Если большинство явных выравниваний совпадают — используем их.
+    # Иначе доверяем стилю Normal (inherited alignment).
+    if explicit_align_vals:
+        top_explicit, top_count = Counter(explicit_align_vals).most_common(1)[0]
+        # Используем явное только если оно не CENTER/RIGHT (маловероятно для body)
+        if top_explicit == WD_ALIGN_PARAGRAPH.JUSTIFY:
+            body_alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        elif top_explicit == WD_ALIGN_PARAGRAPH.LEFT and top_count > 3:
+            body_alignment = WD_ALIGN_PARAGRAPH.LEFT
+        else:
+            body_alignment = default_alignment
+    else:
+        body_alignment = default_alignment
 
     body_cfg = {
         "first_line_indent_cm": first_line_indent_cm,
